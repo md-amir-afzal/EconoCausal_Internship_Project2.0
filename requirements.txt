@@ -1,0 +1,8 @@
+numpy>=2.1
+pandas>=2.2
+scikit-learn>=1.6
+matplotlib>=3.9
+joblib>=1.4
+streamlit>=1.50
+python-pptx>=1.0
+reportlab>=4.2

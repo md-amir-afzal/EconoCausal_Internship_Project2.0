@@ -1,0 +1,27 @@
+EconoCausal validation record
+=============================
+
+Pipeline test:
+python -m src.pipeline
+STATUS: PASS
+
+Unit tests:
+python -m unittest discover -s tests -v
+STATUS: PASS
+Tests run: 5
+Failures: 0
+Errors: 0
+
+Static compilation:
+python -m compileall -q src tests app.py
+STATUS: PASS
+
+Dependency smoke test in the build environment:
+numpy: available
+pandas: available
+scikit-learn: available
+matplotlib: available
+joblib: available
+streamlit: not available in the isolated build environment
+
+Note: Streamlit is listed in requirements.txt and must be installed in the user's .venv before launching the dashboard. The core data-generation, DML training, evaluation and unit-test workflow was executed successfully.
