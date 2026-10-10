@@ -24,4 +24,4 @@ matplotlib: available
 joblib: available
 streamlit: not available in the isolated build environment
 
-Note: Streamlit is listed in requirements.txt and must be installed in the user's .venv before launching the dashboard. The core data-generation, DML training, evaluation and unit-test workflow was executed successfully.
+Note: Streamlit is listed in requirements.txt and must be installed in the user's .venv before running the dashboard. The core data-generation, DML training, evaluation and unit-test workflow was executed successfully.

@@ -1,17 +1,19 @@
-# Python cache
-__pycache__/
-*.py[cod]
-.pytest_cache/
-
-# Virtual environment
+# Python virtual environments and bytecode
 .venv/
 venv/
-env/
+__pycache__/
+*.py[cod]
 
-# IDE
-.vscode/
-.idea/
+# Local credentials and environment configuration
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
 
-# OS
-.DS_Store
-Thumbs.db
+# Machine-specific editor workspace
+.venv.code-workspace
+
+# Common local tooling artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

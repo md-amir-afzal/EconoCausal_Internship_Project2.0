@@ -1,163 +1,71 @@
-from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from pathlib import Path
-import json
-import joblib
 import numpy as np
-import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import KFold
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor, HistGradientBoostingRegressor
+from sklearn.model_selection import KFold
+from sklearn.metrics import mean_squared_error, r2_score
 
-@dataclass
-class DMLResult:
-    elasticity: float
-    standard_error: float
-    ci_low: float
-    ci_high: float
-    outcome_rmse: float
-    outcome_r2: float
-    treatment_rmse: float
-    treatment_r2: float
-    n_observations: int
+def estimate_dml(df, folds=5, seed=42):
+    if folds < 2 or folds > len(df):
+        raise ValueError("folds must be at least 2 and no greater than the number of rows")
+    required = {"price", "units_sold"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
+    if df[["price", "units_sold"]].isna().any().any() or (df["price"] <= 0).any() or (df["units_sold"] < 0).any():
+        raise ValueError("price must be positive and price/units_sold must not contain missing values")
+    work = df.copy()
+    work["log_price"] = np.log(work["price"])
+    work["log_units"] = np.log1p(work["units_sold"])
+    y = work["log_units"].to_numpy()
+    d = work["log_price"].to_numpy()
 
-class DoubleMLPricingModel:
-    """Cross-fitted partially-linear DML estimator for price elasticity."""
+    features = [
+        "category","region","customer_segment","day_of_week","month","quarter",
+        "weekend","holiday","promotion","cost","competitor_price",
+        "demand_index","inventory","ad_spend","rating","competitor_count"
+    ]
+    X = work[features]
+    cat = ["category","region","customer_segment"]
+    num = [c for c in features if c not in cat]
+    prep = ColumnTransformer([("cat", OneHotEncoder(handle_unknown="ignore"), cat)],
+                             remainder="passthrough")
+    Xv = prep.fit_transform(X)
 
-    def __init__(self, n_splits: int = 5, random_state: int = 42):
-        self.n_splits = n_splits
-        self.random_state = random_state
-        self.result_: DMLResult | None = None
-        self.fitted_ = False
+    kf = KFold(n_splits=folds, shuffle=True, random_state=seed)
+    yhat = np.zeros(len(df)); dhat = np.zeros(len(df))
+    for tr, te in kf.split(Xv):
+        # Keep fitting in-process so the project also runs in restricted Windows
+        # environments where joblib worker pools cannot create named pipes.
+        ym = ExtraTreesRegressor(n_estimators=80, min_samples_leaf=8, random_state=seed, n_jobs=1)
+        dm = ExtraTreesRegressor(n_estimators=80, min_samples_leaf=8, random_state=seed+1, n_jobs=1)
+        ym.fit(Xv[tr], y[tr]); dm.fit(Xv[tr], d[tr])
+        yhat[te] = ym.predict(Xv[te]); dhat[te] = dm.predict(Xv[te])
 
-    @staticmethod
-    def _build_preprocessor(categorical, numerical):
-        return ColumnTransformer(
-            transformers=[
-                ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical),
-                ("num", "passthrough", numerical),
-            ],
-            remainder="drop",
-        )
-
-    def fit(self, df: pd.DataFrame) -> "DoubleMLPricingModel":
-        required = {
-            "category", "region", "day_of_week", "holiday", "promotion",
-            "cost", "competitor_price", "demand_index", "inventory",
-            "price", "units_sold"
-        }
-        missing = required - set(df.columns)
-        if missing:
-            raise ValueError(f"Missing columns: {sorted(missing)}")
-
-        work = df.copy()
-        work["log_price"] = np.log(work["price"].clip(lower=1e-6))
-        work["log_demand"] = np.log1p(work["units_sold"].clip(lower=0))
-
-        x_cols = [
-            "category", "region", "day_of_week", "holiday", "promotion",
-            "cost", "competitor_price", "demand_index", "inventory"
-        ]
-        categorical = ["category", "region"]
-        numerical = [c for c in x_cols if c not in categorical]
-
-        kf = KFold(self.n_splits, shuffle=True, random_state=self.random_state)
-        y = work["log_demand"].to_numpy(float)
-        d = work["log_price"].to_numpy(float)
-        x = work[x_cols]
-
-        y_res = np.zeros(len(work))
-        d_res = np.zeros(len(work))
-        y_oof = np.zeros(len(work))
-        d_oof = np.zeros(len(work))
-
-        for train_idx, test_idx in kf.split(x):
-            y_model = Pipeline([
-                ("prep", self._build_preprocessor(categorical, numerical)),
-                ("model", RandomForestRegressor(
-                    n_estimators=180, min_samples_leaf=8,
-                    random_state=self.random_state, n_jobs=-1
-                )),
-            ])
-            d_model = Pipeline([
-                ("prep", self._build_preprocessor(categorical, numerical)),
-                ("model", RandomForestRegressor(
-                    n_estimators=180, min_samples_leaf=8,
-                    random_state=self.random_state + 1, n_jobs=-1
-                )),
-            ])
-            y_model.fit(x.iloc[train_idx], y[train_idx])
-            d_model.fit(x.iloc[train_idx], d[train_idx])
-            y_pred = y_model.predict(x.iloc[test_idx])
-            d_pred = d_model.predict(x.iloc[test_idx])
-            y_oof[test_idx] = y_pred
-            d_oof[test_idx] = d_pred
-            y_res[test_idx] = y[test_idx] - y_pred
-            d_res[test_idx] = d[test_idx] - d_pred
-
-        denom = float(np.sum(d_res ** 2))
-        if denom <= 1e-12:
-            raise RuntimeError("Residualized treatment has insufficient variation.")
-        theta = float(np.sum(d_res * y_res) / denom)
-
-        score = d_res * (y_res - theta * d_res)
-        var = float(np.mean(score ** 2) / (np.mean(d_res ** 2) ** 2) / len(df))
-        se = float(np.sqrt(max(var, 0)))
-
-        rng = np.random.default_rng(self.random_state)
-        bootstrap = []
-        n = len(df)
-        for _ in range(120):
-            idx = rng.integers(0, n, n)
-            db = d_res[idx]
-            yb = y_res[idx]
-            bootstrap.append(float(np.sum(db * yb) / max(np.sum(db ** 2), 1e-12)))
-        ci_low, ci_high = np.quantile(bootstrap, [0.025, 0.975])
-
-        self.result_ = DMLResult(
-            elasticity=theta,
-            standard_error=se,
-            ci_low=float(ci_low),
-            ci_high=float(ci_high),
-            outcome_rmse=float(mean_squared_error(y, y_oof) ** 0.5),
-            outcome_r2=float(r2_score(y, y_oof)),
-            treatment_rmse=float(mean_squared_error(d, d_oof) ** 0.5),
-            treatment_r2=float(r2_score(d, d_oof)),
-            n_observations=n,
-        )
-        self.fitted_ = True
-        self.oof_predictions_ = pd.DataFrame({
-            "actual_log_demand": y,
-            "predicted_log_demand": y_oof,
-            "actual_log_price": d,
-            "predicted_log_price": d_oof,
-            "outcome_residual": y_res,
-            "treatment_residual": d_res,
-        })
-        return self
-
-    def save(self, path: str | Path):
-        if not self.fitted_:
-            raise RuntimeError("Fit the model before saving.")
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self, path)
-
-    @classmethod
-    def load(cls, path: str | Path) -> "DoubleMLPricingModel":
-        return joblib.load(path)
-
-    def metrics_dict(self):
-        if self.result_ is None:
-            raise RuntimeError("Model is not fitted.")
-        return asdict(self.result_)
-
-def save_metrics(model: DoubleMLPricingModel, path: str | Path):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(model.metrics_dict(), f, indent=2)
+    ry, rd = y-yhat, d-dhat
+    denominator = float(np.dot(rd, rd))
+    if not np.isfinite(denominator) or denominator <= np.finfo(float).eps:
+        raise ValueError("Residualized price has no usable variation; the elasticity cannot be estimated")
+    elasticity = float(np.dot(rd, ry)/denominator)
+    residual = ry - elasticity * rd
+    # HC1 heteroskedasticity-robust standard error for the residualized
+    # one-regressor estimate.
+    se = float(np.sqrt((len(df) / max(len(df) - 1, 1)) * np.dot(rd**2, residual**2) / denominator**2))
+    rng = np.random.default_rng(seed)
+    boots = []
+    idx = np.arange(len(df))
+    for _ in range(250):
+        b = rng.choice(idx, len(idx), replace=True)
+        rdb, ryb = rd[b], ry[b]
+        boots.append(np.dot(rdb, ryb)/np.dot(rdb, rdb))
+    ci = np.quantile(boots, [.025,.975])
+    return {
+        "elasticity": elasticity, "standard_error": se,
+        "ci_low": float(ci[0]), "ci_high": float(ci[1]),
+        "outcome_rmse": float(np.sqrt(mean_squared_error(y,yhat))),
+        "outcome_r2": float(r2_score(y,yhat)),
+        "treatment_rmse": float(np.sqrt(mean_squared_error(d,dhat))),
+        "treatment_r2": float(r2_score(d,dhat)),
+        "n_observations": int(len(df))
+    }
