@@ -1,17 +1,16 @@
 # EconoCausal
 
-**An internship portfolio project in causal machine learning and pricing analytics.** EconoCausal demonstrates how an analyst can frame a retail pricing question, estimate price elasticity with cross-fitted Double Machine Learning, and communicate a transparent what-if scenario through an interactive dashboard.
+**An internship portfolio project in causal machine learning and pricing analytics.** EconoCausal demonstrates how an analyst can frame a retail pricing question, estimate price elasticity with cross-fitted Double Machine Learning, validate the input data, and communicate a transparent what-if scenario.
 
-> The included retail data is synthetic. Results are educational examples, not findings about a real company or market.
+> Synthetic data is provided for demonstration. Uploaded business data remains observational, and estimates are not automatically causal findings or pricing recommendations.
 
 ## What the project demonstrates
 
-- A reproducible 50,000-row synthetic retail dataset with business drivers such as promotions, competitor prices, inventory, advertising, and customer segments.
-- A Double Machine Learning pipeline with cross-fitted ExtraTrees models and a bootstrap confidence interval.
-- A company-style dashboard with live scenario controls, price response curve, baseline comparison, and retail context charts.
-- A data explorer with filters, visual analysis, and CSV export.
-- An optional AI economics tutor that explains the current model and scenario using aggregate metrics, with chat history limited to the current Streamlit session.
-- Clear communication of assumptions, limitations, and the next steps required before using real company data.
+- A reproducible 50,000-row synthetic retail dataset.
+- Cross-fitted ExtraTrees nuisance models with fold-local preprocessing, date-aware validation, robust standard errors, and row or cluster bootstrap intervals.
+- CSV upload with schema checks, outcome validation, date coverage, missing-value and duplicate reporting, and confounder coverage warnings.
+- Interactive price scenarios, dashboard diagnostics, cohort filters, and CSV export.
+- An optional AI economics tutor that uses aggregate model and scenario context, never uploaded row-level records.
 
 ## Run locally
 
@@ -20,8 +19,6 @@ From the project folder in PowerShell:
 ```powershell
 .\.venv\Scripts\streamlit.exe run app.py
 ```
-
-Open the local URL printed in the terminal, usually `http://localhost:8501`. Keep the terminal open while using the dashboard.
 
 If the virtual environment does not exist yet:
 
@@ -32,31 +29,31 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## How to explore
+## Use the dashboard
 
-1. Choose a product category, region, and customer segment in the sidebar.
-2. Enter the selling price and optional promotion, demand, ad spend, rating, and inventory values to see the scenario update.
-3. Review the estimated units, revenue, and demand curve on the dashboard.
-4. Open **Explore data** to filter observations and download a CSV sample.
-5. Open **Methodology** to review the model, evaluation metrics, assumptions, and responsible-use notes.
-6. Open **AI tutor** to ask questions. Configure an OpenAI API key in `.streamlit/secrets.toml` or enter it for the current session. API use can incur charges; no row-level data is sent to the tutor.
+1. Choose **Synthetic demo** or **Upload a CSV** in the sidebar.
+2. For a CSV, include `price`, `units_sold`, and at least one supported control. Common controls are `date`, `category`, `region`, `customer_segment`, `promotion`, `cost`, `competitor_price`, `demand_index`, `inventory`, `ad_spend`, `rating`, and `competitor_count`. `unit_price`, `selling_price`, `quantity`, and `units` are accepted aliases.
+3. Enter a selling price to view the estimated scenario. Synthetic mode also supports promotion, demand, advertising, rating, and inventory controls. Uploaded data uses a price-only scenario; synthetic generator coefficients are never applied to business data.
+4. Review the estimate, uncertainty interval, support warning, validation strategy, and data-quality diagnostics.
+5. Use **Explore data** to filter and download a sample. Use **AI tutor** for explanations. API keys belong in `.streamlit/secrets.toml` or environment variables, never in source control. API usage may incur charges.
 
 ## Method summary
 
-The treatment is `log(price)` and the outcome is `log(1 + units_sold)`. Cross-fitted nuisance models predict each using observed product, calendar, promotion, cost, competitor, demand, inventory, advertising, rating, and competition features. Regressing the residualized outcome on residualized treatment yields the estimated elasticity. The dashboard uses that estimated elasticity for the price change; other scenario controls use the known coefficients from the synthetic data generator so their contribution is transparent.
+The treatment is `log(price)` and the outcome is `log(1 + units_sold)`. Cross-fitted nuisance models predict each using available product, store, calendar, promotion, cost, competitor, demand, inventory, advertising, rating, and competition features. Preprocessing is learned inside each fold. When complete dates span enough months, the estimator trains on earlier month blocks and predicts later blocks; otherwise it labels and uses randomized cross-fitting. The residualized outcome is regressed on residualized price to estimate elasticity. The app reports heteroskedasticity-robust standard errors and a bootstrap interval, clustering the bootstrap by an available store or product identifier when enough clusters exist.
 
-## Limitations and next steps
+## Limitations
 
-Synthetic data has known structure and does not capture every source of bias in real retail data. A company deployment would require data validation, a clearly defined pricing intervention, robust sensitivity analysis, and preferably randomized price experiments or another credible identification strategy. Scenario outputs should not be used as automated pricing recommendations.
+Validation checks do not prove that all confounders have been controlled. Real data requires review of the pricing decision process, repeated observations, missingness, and the business meaning of every field. If stores or products repeat over time, include their identifiers for more appropriate uncertainty estimates. Prefer randomized pricing experiments or another credible identification strategy where feasible. Scenario outputs are educational and must not be used as automated pricing recommendations.
 
-The AI tutor calls the OpenAI Responses API and does not fine-tune or train a model on chat. Streamlit is the current application format: this repository does not yet produce native Android APK/AAB, iOS, or Microsoft Store packages. Store releases need a dedicated mobile/desktop client, store-specific packaging, signing, privacy disclosures, and developer accounts.
+The tutor calls the OpenAI Responses API and does not fine-tune or train a model on chat. Streamlit is the current application format; native Android, iOS, and Microsoft Store packages are not included.
 
 ## Project layout
 
 ```text
-app.py                 Streamlit dashboard and scenario interface
+app.py                 Streamlit dashboard, upload flow, and scenario interface
 src/data_generator.py  Reproducible synthetic retail data
-src/dml_model.py       Cross-fitted DML estimator
+src/data_validation.py CSV normalization and quality checks
+src/dml_model.py       Cross-fitted DML estimator and diagnostics
 tests/                 Existing project checks
 reports/               Project reports, metrics, and presentation material
 ```
